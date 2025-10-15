@@ -92,3 +92,5 @@ class LocalUpdate_FedAvg:
         return model.state_dict(), loss_start, loss_end, acc_before, acc_after
 
     
+
+    

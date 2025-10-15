@@ -36,3 +36,4 @@ def gaussian_noise(data_shape, clip, sigma, device=None):
     Generate Gaussian noise tensor
     """
     return torch.normal(0, sigma * clip, size=data_shape).to(device)
+

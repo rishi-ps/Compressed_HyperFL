@@ -105,4 +105,3 @@ class CNN_MNIST_Hyper(nn.Module):
         return weights
 
 
-

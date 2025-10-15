@@ -3,10 +3,10 @@ import copy
 import numpy as np
 from numpy import random
 from numpy.core.shape_base import stack
-import tools
 import math
 import torch
 from torch import nn
+from torch.utils.data import DataLoader
 import time
 
 
@@ -25,7 +25,7 @@ class LocalUpdate_HyperFL(object):
         self.agg_weight = self.aggregate_weight()
 
     def aggregate_weight(self):
-        data_size = len(self.train_data.dataset)
+        data_size = len(self.train_data)
         w = torch.tensor(data_size).to(self.device)
         return w
 
@@ -34,12 +34,11 @@ class LocalUpdate_HyperFL(object):
         model.eval()
         device = self.device
         correct = 0
-        total = len(test_loader.dataset)
+        total = len(test_loader)
         loss_test = []
         with torch.no_grad():
-            for inputs, labels in test_loader:
+            for inputs, labels in DataLoader(test_loader, batch_size=self.args.local_bs, shuffle=False):
                 inputs, labels = inputs.to(device), labels.to(device)
-                # _, outputs = model(inputs)
                 outputs = model.predict(inputs)
                 loss = self.criterion(outputs, labels)
                 loss_test.append(loss.item())
@@ -48,32 +47,37 @@ class LocalUpdate_HyperFL(object):
         acc = 100.0 * correct / total
         return acc, sum(loss_test) / len(loss_test)
 
-    def update_hypernetwor(self, global_weight):
+    def update_hypernetwork(self, global_weight):
         self.local_model.hypernetwork.load_state_dict(global_weight)
 
     def local_training(self, local_epoch, round=0):
-        # Set mode to train model
         model = self.local_model
         model.train()
         round_loss = []
         iter_loss = []
         model.zero_grad()
 
+        # Evaluate before training
         acc0, _ = self.local_test(self.test_data)
 
         local_ep_rep = local_epoch
         epoch_classifier = 1
 
-        # only update classifier ----------------------------------------------
-        optimizer = torch.optim.SGD(model.target_model.fc2.parameters(), lr=self.args.lr_g, momentum=0.5,
-                                    weight_decay=0.0005)
+        # ---------- Update classifier ----------
+        optimizer = torch.optim.SGD(
+            model.target_model.fc2.parameters(),
+            lr=self.args.lr_g,
+            momentum=0.5,
+            weight_decay=0.0005
+        )
+
+        train_loader = DataLoader(
+            self.train_data, batch_size=self.args.local_bs, shuffle=True
+        )
 
         for ep in range(epoch_classifier):
-            data_loader = iter(self.train_data)
-            iter_num = len(self.train_data)   # fixed here
-            for it in range(iter_num):
+            for images, labels in train_loader:
                 optimizer.zero_grad()
-                images, labels = next(data_loader)
                 images, labels = images.to(self.device), labels.to(self.device)
                 _, output = model(images)
                 loss = self.criterion(output, labels)
@@ -82,49 +86,57 @@ class LocalUpdate_HyperFL(object):
                 iter_loss.append(loss.item())
             round_loss.append(sum(iter_loss) / len(iter_loss))
             iter_loss = []
+
         acc1, _ = self.local_test(self.test_data)
 
-        # only update hypernetwork ----------------------------------------------
-        optimizer = torch.optim.SGD([{'params': model.hypernetwork.parameters()},
-                                     {'params': model.client_embedding.parameters()}],
-                                    lr=self.args.lr, momentum=self.args.momentum, weight_decay=0.0005)
+        # ---------- Update hypernetwork ----------
+        optimizer = torch.optim.SGD(
+            [{'params': model.hypernetwork.parameters()},
+             {'params': model.client_embedding.parameters()}],
+            lr=self.args.lr,
+            momentum=self.args.momentum,
+            weight_decay=0.0005
+        )
 
         for ep in range(local_ep_rep):
-            data_loader = iter(self.train_data)
-            iter_num = len(self.train_data)   # fixed here
-            for it in range(iter_num):
+            for images, labels in train_loader:
                 optimizer.zero_grad()
                 model.zero_grad()
-                images, labels = next(data_loader)
                 images, labels = images.to(self.device), labels.to(self.device)
                 _, output = model(images)
                 loss = self.criterion(output, labels)
+
                 weights = model.generate_weight()
                 params_to_grads = []
                 for name, param in model.target_model.named_parameters():
                     if 'fc2' not in name:
                         params_to_grads.append(param)
                 grads = torch.autograd.grad(loss, params_to_grads)
+
                 hypernetwork_grads = torch.autograd.grad(
-                    list(weights.values()), model.hypernetwork.parameters(), grad_outputs=list(grads),
-                    retain_graph=True
+                    list(weights.values()), model.hypernetwork.parameters(),
+                    grad_outputs=list(grads), retain_graph=True
                 )
                 client_embedding_grads = torch.autograd.grad(
-                    list(weights.values()), model.client_embedding.parameters(), grad_outputs=list(grads),
-                    retain_graph=True
+                    list(weights.values()), model.client_embedding.parameters(),
+                    grad_outputs=list(grads), retain_graph=True
                 )
+
                 for p, g in zip(model.hypernetwork.parameters(), hypernetwork_grads):
                     p.grad = g
                 for p, g in zip(model.client_embedding.parameters(), client_embedding_grads):
                     p.grad = g
+
                 torch.nn.utils.clip_grad_norm_(model.hypernetwork.parameters(), 50)
                 torch.nn.utils.clip_grad_norm_(model.client_embedding.parameters(), 50)
                 optimizer.step()
                 iter_loss.append(loss.item())
+
             round_loss.append(sum(iter_loss) / len(iter_loss))
             iter_loss = []
+
         round_loss1 = round_loss[0]
         round_loss2 = round_loss[-1]
         acc2, _ = self.local_test(self.test_data)
 
-        return model.hypernetwork.state_dict(), round_loss1, round_loss2, acc0, acc2 
+        return model.hypernetwork.state_dict(), round_loss1, round_loss2, acc0, acc2

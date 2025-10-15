@@ -1,6 +1,6 @@
 import numpy as np
 from torchvision import datasets, transforms
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import Subset
 import torch
 
 # ----------------- Dataset Loader ----------------- #
@@ -8,8 +8,8 @@ def get_dataset(args):
     """
     Prepare federated MNIST datasets with IID or non-IID splits.
     Returns:
-        train_loaders: list of DataLoaders for each client
-        global_test_loader: DataLoader for full test set
+        train_subsets: list of Subset objects for each client
+        global_test_dataset: full MNIST test dataset
     """
     transform = transforms.Compose([
         transforms.ToTensor(),
@@ -26,20 +26,20 @@ def get_dataset(args):
     else:
         user_groups = mnist_noniid(train_dataset, args.num_users)
 
-    train_loaders = []
+    # Instead of DataLoaders, return dataset subsets
+    train_subsets = []
     for i in range(args.num_users):
         indices = user_groups[i]
         train_subset = Subset(train_dataset, indices)
-        train_loader = DataLoader(train_subset, batch_size=args.local_bs, shuffle=True)
-        train_loaders.append(train_loader)
+        train_subsets.append(train_subset)
 
-    # Global test loader using full test dataset
-    global_test_loader = DataLoader(test_dataset, batch_size=args.local_bs, shuffle=False)
+    # Return subsets (datasets) instead of loaders
+    return train_subsets, test_dataset
 
-    return train_loaders, global_test_loader
 
 # ----------------- IID Split ----------------- #
 def mnist_iid(dataset, num_users):
+    """Split dataset into IID partitions for each client."""
     num_items = len(dataset) // num_users
     dict_users, all_idxs = {}, np.arange(len(dataset))
     np.random.seed(2021)
@@ -49,10 +49,11 @@ def mnist_iid(dataset, num_users):
         all_idxs = np.setdiff1d(all_idxs, select_idxs)
     return dict_users
 
+
 # ----------------- Non-IID Split (Safe) ----------------- #
 def mnist_noniid(dataset, num_users, shard_per_user=3):
     """
-    Split dataset into non-IID subsets for each client using shards per class
+    Split dataset into non-IID subsets for each client using shards per class.
     """
     np.random.seed(2022)
     num_classes = len(np.unique(dataset.targets))
@@ -90,6 +91,7 @@ def mnist_noniid(dataset, num_users, shard_per_user=3):
             raise ValueError(f"User {key} received no samples. Reduce shard_per_user or num_users.")
 
     return dict_users
+
 
 
 

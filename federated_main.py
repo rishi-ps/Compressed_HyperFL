@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import copy
 import os
+from torch.utils.data import Subset, DataLoader
 
 from data_loader import get_dataset
 from running import one_round_training
@@ -30,7 +31,7 @@ if __name__ == '__main__':
     args.num_classes = 10
 
     # ----------------- Dataset ----------------- #
-    train_loaders, global_test_loader = get_dataset(args)  # per-client train loaders
+    train_datasets, global_test_dataset = get_dataset(args)
 
     # ----------------- Global model ----------------- #
     if args.train_rule == 'HyperFL':
@@ -44,7 +45,7 @@ if __name__ == '__main__':
     print(args)
 
     # ----------------- LocalUpdate / One-round functions ----------------- #
-    LocalUpdate = local_update(args.train_rule)            # returns class
+    LocalUpdate = local_update(args.train_rule)            # returns the class
     train_round_parallel = one_round_training(args.train_rule)
 
     train_loss, local_accs1, local_accs2 = [], [], []
@@ -52,15 +53,34 @@ if __name__ == '__main__':
 
     # ----------------- Initialize local clients ----------------- #
     for idx in range(args.num_users):
-        local_clients.append(
-            LocalUpdate(
-                idx=idx,
-                args=args,
-                train_loader=train_loaders[idx],     # updated keyword
-                test_loader=global_test_loader,      # updated keyword
-                model=copy.deepcopy(global_model)
+        train_set_i = train_datasets[idx]
+        test_set_i = global_test_dataset
+
+        if args.train_rule == 'HyperFL':
+            # HyperFL uses datasets (creates loaders internally)
+            local_clients.append(
+                LocalUpdate(
+                    idx=idx,
+                    args=args,
+                    train_set=train_set_i,
+                    test_set=test_set_i,
+                    model=copy.deepcopy(global_model)
+                )
             )
-        )
+        else:
+            # FedAvg uses explicit DataLoaders
+            train_loader = DataLoader(train_set_i, batch_size=args.local_bs, shuffle=True)
+            test_loader = DataLoader(test_set_i, batch_size=args.local_bs, shuffle=False)
+
+            local_clients.append(
+                LocalUpdate(
+                    idx=idx,
+                    args=args,
+                    train_loader=train_loader,
+                    test_loader=test_loader,
+                    model=copy.deepcopy(global_model)
+                )
+            )
 
     # ----------------- Federated training ----------------- #
     for rnd in range(args.epochs):
@@ -76,5 +96,3 @@ if __name__ == '__main__':
         print(f"Local Accuracy: {local_acc1:.2f}%, {local_acc2:.2f}%")
 
     print("\n=== Training Complete ===")
-
-

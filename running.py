@@ -90,4 +90,3 @@ def train_round_hyperfl(args, global_model, local_clients, rnd, **kwargs):
     acc_avg2 = np.mean(local_acc2)
 
     return loss_avg1, loss_avg2, acc_avg1, acc_avg2
-
