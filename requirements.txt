@@ -1,0 +1,7 @@
+numpy
+torch
+torchaudio
+torchvision
+scipy
+timm
+cvxpy
