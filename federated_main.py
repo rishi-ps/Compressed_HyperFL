@@ -34,12 +34,12 @@ if __name__ == '__main__':
     train_datasets, global_test_dataset = get_dataset(args)
 
     # ----------------- Global model ----------------- #
-    if args.train_rule == 'HyperFL':
+    if args.train_rule in ['HyperFL', 'HyperFL_Sparse']:
         global_model = CNN_MNIST_Hyper(args=args).to(device)
     elif args.train_rule == 'FedAvg':
         global_model = CNN_MNIST(num_classes=args.num_classes).to(device)
     else:
-        raise NotImplementedError("Only FedAvg and HyperFL are supported for MNIST.")
+        raise NotImplementedError("Only FedAvg, HyperFL and HyperFL_Sparse are supported for MNIST.")
 
     print(f"\n=== Training {args.train_rule} on MNIST ===")
     print(args)
@@ -50,13 +50,14 @@ if __name__ == '__main__':
 
     train_loss, local_accs1, local_accs2 = [], [], []
     local_clients = []
+    sparsity_per_round = []
 
     # ----------------- Initialize local clients ----------------- #
     for idx in range(args.num_users):
         train_set_i = train_datasets[idx]
         test_set_i = global_test_dataset
 
-        if args.train_rule == 'HyperFL':
+        if args.train_rule in ['HyperFL', 'HyperFL_Sparse']:
             # HyperFL uses datasets (creates loaders internally)
             local_clients.append(
                 LocalUpdate(
@@ -85,14 +86,36 @@ if __name__ == '__main__':
     # ----------------- Federated training ----------------- #
     for rnd in range(args.epochs):
         print(f"\n========== Round {rnd + 1} / {args.epochs} ==========")
-        loss1, loss2, local_acc1, local_acc2 = train_round_parallel(
+        results = train_round_parallel(
             args, global_model, local_clients, rnd
         )
+
+        # For HyperFL_Sparse, running.train_round returns 5 values including sparsity
+        if args.train_rule == 'HyperFL_Sparse':
+            loss1, loss2, local_acc1, local_acc2, sparsity_avg = results
+            sparsity_per_round.append(sparsity_avg)
+        else:
+            loss1, loss2, local_acc1, local_acc2 = results
+
         train_loss.append(loss1)
         local_accs1.append(local_acc1)
         local_accs2.append(local_acc2)
 
-        print(f"Train Loss: {loss1:.4f}, {loss2:.4f}")
+        if args.train_rule == 'HyperFL_Sparse':
+            print(f"Train Loss: {loss1:.4f}, {loss2:.4f} | Avg Sparsity kept: {sparsity_avg*100:.2f}%")
+        else:
+            print(f"Train Loss: {loss1:.4f}, {loss2:.4f}")
         print(f"Local Accuracy: {local_acc1:.2f}%, {local_acc2:.2f}%")
 
     print("\n=== Training Complete ===")
+    
+    # Optionally save sparsity_per_round for plotting later
+    if sparsity_per_round:
+        np.save('sparsity_per_round.npy', np.array(sparsity_per_round))
+
+        # ----------------- Save results for plotting ----------------- #
+    np.save(f"{args.train_rule}_train_loss.npy", np.array(train_loss))
+    np.save(f"{args.train_rule}_accs2.npy", np.array(local_accs2))
+    if args.train_rule == 'HyperFL_Sparse':
+        np.save(f"{args.train_rule}_sparsity.npy", np.array(sparsity_per_round))
+
